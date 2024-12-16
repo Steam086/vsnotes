@@ -1,4 +1,4 @@
-
+![[Pasted image 20241216204310.png]]
 关键细节可以直接跳转到：[Reduce Scatter](#ReduceScatter)
 ### 符号解释
 
@@ -16,7 +16,7 @@
 - [register_graph_buffers](#register_graph_buffers)
 - should_custom_ar	：判断是否应该使用custom_all_reduce
 - [all_reduce](#all_reduce) :custom_all_reduce调用的函数，调用了cuda定义的函数
-- [custom_all_reduce](#custom_all_reduce)	对外调用的接口
+- custom_all_reduce	对外调用的接口
 
 ### Details
 
@@ -32,6 +32,11 @@
 这个函数是一个 `@contextmanager`，主要目的是在graph_capture最后调用 `register_graph_buffers`，将所有allreduce用到的输入地址注册到rank_data中。
 
 解释：这个函数仅用于CUDA graph模式中，在CUDA graph 模式中，所有的操作不会立即被执行，CUDA会根据操作预先构建计算图，并一次性提交到GPU中执行，其中allreduce操作进行进程间通信需要将input注册到 `rank_data`中，这个注册的操作不会每次调用allreduce都执行一次，会在调用allreduce时将需要注册的ptr存入一个待注册数组（`graph_unreg_buffers_`）中，等到调用 `register_graph_buffers`时再将这些未被注册的ptr 进行 1. allgather获取其他进程中的handles。 2. 将这些获取到的handles打开并注册到 `rank_data`中
+
+
+#### register_graph_buffers
+
+与capture函数密切相关，此函数作用是将capture上下文中所有allreduce操作即将要用到的输入tensor注册到
 #### **all_reduce**
 先进行一个条件的判断（是否处于CUDA graph 模式）如果不处于CUDA graph 模式，直接将input拷贝到预先分配的GPU buffer中，如果处于CUDA graph模式，直接input放入 `graph_unreg_buffers_`并进行allreduce操作。前面解释了这样做的原因
 
