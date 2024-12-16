@@ -1,4 +1,4 @@
-![[Pasted image 20241216204310.png]]
+![](https://cdn.nlark.com/yuque/0/2024/png/32583568/1734109800857-6bbe190d-38d1-4d4f-a643-b2bfa34f7726.png?x-oss-process=image%2Fformat%2Cwebp)
 关键细节可以直接跳转到：[Reduce Scatter](#ReduceScatter)
 ### 符号解释
 
