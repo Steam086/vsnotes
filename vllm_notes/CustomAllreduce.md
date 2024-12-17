@@ -1,6 +1,6 @@
 
 关键细节可以直接跳转到：[Reduce Scatter](#ReduceScatter)
-### 符号解释
+## 符号解释
 
 | name              | 说明                                                                                                                                            |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -9,7 +9,7 @@
 | "register"        | 下面函数的标识符中有register存在，register应该表示的是： 将内存中的RankData拷贝到GPU显存的rank_data池中                                                                        |
 | handle和ptr        | handle是通过CUDA进程间通信（IPC）函数获取的返回值，可以传递给其他进程并在其他进程通过OpenIpcHandle打开以获取ptr                                                                        |
 
-### API overview
+## API overview
 
 - [create_shared_buffer](#create_shared_buffer)/free_shared_buffer ：	创建、释放共享内存（GPU上的内存）
 - [capture](#capture): @contextmanager	The main responsibility of this context manager is the `register_graph_buffers` call at the end of the context.
@@ -17,8 +17,24 @@
 - should_custom_ar	：判断是否应该使用custom_all_reduce
 - [all_reduce](#all_reduce) :custom_all_reduce调用的函数，调用了cuda定义的函数
 - custom_all_reduce	对外调用的接口
+- [is_weak_contiguous](#is_weak_contiguous)(Tensor): 判断Tensor是否“弱连续”
 
-### Details
+## Details
+### **is_weak_contiguous**
+
+例如下面的程序输出为False，但是is_weak_contiguous输出为True，
+```
+import torch
+
+x = randn(2, 2)
+y = x.transpose(0, 1)
+print(y.is_contiguous())  # False
+print(is_weak_contiguous(y))  #True
+```
+这个函数会在is_contiguous()返回值为False时继续判断，如果输入的Tensor在分配的内存中处于最后一段而且在内存中连续，则返回True
+
+ 此函数的作用：
+	进行进程间通信时需要使用$getMemHandle$，获取到的Handle是指向预分配内存起始地址的Handle，需要有一个offset表示输入Tensor相对这个起始地址的偏移量 
 
 #### **create_shared_buffer**
 
@@ -28,16 +44,27 @@
 
 创建共享内存并返回指向共享内存的指针$ptrs$,其中调用了CUDA内存分配函数，并使用OpenIpcHandle打开了其他同一node上其他设备的共享内存handle。
 
-#### **capture**:
+### **capture**:
 这个函数是一个 `@contextmanager`，主要目的是在graph_capture最后调用 `register_graph_buffers`，将所有allreduce用到的输入地址注册到rank_data中。
 
 解释：这个函数仅用于CUDA graph模式中，在CUDA graph 模式中，所有的操作不会立即被执行，CUDA会根据操作预先构建计算图，并一次性提交到GPU中执行，其中allreduce操作进行进程间通信需要将input注册到 `rank_data`中，这个注册的操作不会每次调用allreduce都执行一次，会在调用allreduce时将需要注册的ptr存入一个待注册数组（`graph_unreg_buffers_`）中，等到调用 `register_graph_buffers`时再将这些未被注册的ptr 进行 1. allgather获取其他进程中的handles。 2. 将这些获取到的handles打开并注册到 `rank_data`中
 
 
-#### register_graph_buffers
+### **register_graph_buffers**
 
-与capture函数密切相关，此函数作用是将capture上下文中所有allreduce操作即将要用到的输入tensor注册到
-#### **all_reduce**
+总是在capture上下文的最后调用，将capture上下文中执行的Allreduce代码中需要的input全部通过open_ipc_handle进行注册
+```
+@contextmanager
+def capture(self):
+	try:
+		self._IS_CAPTURING = True
+		yield
+	finally:
+		self._IS_CAPTURING = False
+		if not self.disabled:
+			self.register_graph_buffers()
+```
+### **all_reduce**
 先进行一个条件的判断（是否处于CUDA graph 模式）如果不处于CUDA graph 模式，直接将input拷贝到预先分配的GPU buffer中，如果处于CUDA graph模式，直接input放入 `graph_unreg_buffers_`并进行allreduce操作。前面解释了这样做的原因
 
 在C++函数内部有更细节的处理：
@@ -87,7 +114,7 @@ for (int idx = tid; idx < largest_part; idx += stride) {
 
 关于第二阶段的同步操作，非常重要：
 visibility across devices is only guaranteed between threads that have the same tid.
-### ReduceScatter
+## ReduceScatter
 
 ![](https://cdn.nlark.com/yuque/0/2024/png/32583568/1734110259288-a5efb5c4-9ab3-486c-9797-80a81cfa3363.png?x-oss-process=image%2Fformat%2Cwebp)
 四个设备的reduce scatte示意图
@@ -106,7 +133,6 @@ visibility across devices is only guaranteed between threads that have the same 
 显然这样的同步操作拖累了性能
 2. vllm的实现：
 `Note: it's important to match the tid between the two stages, because visibility across devices is only guaranteed between threads that have the same tid. If thread i computes the sum of start + i in the first stage, then thread i also gathers start + i from all ranks.`
-
 也就是说，假设
 ```
 world_size = 4
@@ -117,14 +143,14 @@ tensor.size() = 403
 
 在一个进程中，tid=1 的线程，在allgather阶段，需要其他进程中tid相同的线程reduce的结果，所以一个线程 tid=1 的线程只需要等待其他 $tid=1,rank\in [0,ngpus]$ 线程reduce结束后就可以进行allgather操作。也就是说，GPU1中的线程1要等待所有GPU中的tid为1的线程1 reduce操作结束之后才能进行第二阶段的allgather操作。
 
-但是在代码中，一个GPU中线程的数量最高达到 $36 * 512$ 个，如果为这些线程全部设置同步操作，GPU之间的开销未免有些大（$36 * 512$个线程要与其他GPU的线程进行通信）。
+但是在代码中，一个GPU中线程的数量最高达到 $36 * 512$  个，如果为这些线程全部设置同步操作，GPU之间的开销未免有些大（$36 * 512$ 个线程要与其他GPU的线程进行通信）。
 源码中设置了多个block，每个block中派出前ngpus个线程与其他进程进行通信，这样只有36个线程需要进行跨GPU的同步通信，进行GPU之间的同步通信后，再进行GPU内部的同步。
 
-省流版：
+**省流版：**
 *简单来说，一个GPU中有多个线程 （36 * 512个），这些线程被分成多个block(36个)，每个block有多个thread（512个），==其中线程同步只能发生在block内*==
 所以上面的步骤可以说成是每个block派 $ngpus$ 个线程与其他GPU进行同步操作（开销较大），然后block内的线程再进行同步。
 
-Question：
+**Question：**
 （==这里我对源代码比较有疑问的一个点是：既然第二阶段allgather只有read操作，为什么还要将第一阶段的结果保存到临时缓冲区中而不是直接保存到最终的结果中？ 直接保存到result中感觉不会影响第二阶段的allgather==）
 已解决： 
 这里进行运算操作时，只有input张量和临时缓冲区是被注册到shared_buffer中的，其他进程并不能直接访问到result张量。如果每次进行all reduce都注册一个result变量作为共享内存，会增加进程间通信开销（在进程间传递shared_memory句柄）。
