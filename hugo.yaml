@@ -4,8 +4,8 @@ title: My New Hugo Site
 module:
   imports:
     - path: github.com/imfing/hextra
-  mounts:
-  - source: content
-    target: content
-  - source: ./vllm_notes
-    target: content/docs
+  # mounts:
+  # - source: content
+  #   target: content
+  # - source: ./vllm_notes
+  #   target: content/docs
