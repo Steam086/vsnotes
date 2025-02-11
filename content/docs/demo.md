@@ -4,6 +4,7 @@ draft: true
 title: 'Demo'
 math: true
 ---
+test
 # 第一个Doc
 12344444223123
 公式展示：
