@@ -1,13 +1,13 @@
 vllm尝试使用了许多使用NCCL的方式，但是都没有很好的解决问题，最后使用Python脚本写了一个wrapper直接绑定NCCL的动态库。
 
 vllm中处理allreduce的优先级是：
-- CustomAllreduce
+- **CustomAllreduce**
 - Pynccl
 - torch.distributed
+其中，只有CustomAllreduce是out-place的，Pynccl和torch.distributed是in-place的
+
 
 torch.distributed在最后被考虑，因为：`torch.distributed.all_reduce` 包含许多其他潜在的 CUDA API，这些 API 在捕获 CUDA 图时是不允许的。 
-
-
 
 ## pynccl_wrapper.py中的解释
 
